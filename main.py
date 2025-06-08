@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import dateparser
 import os
+import re
 
 app = Flask(__name__)
 
@@ -22,7 +23,7 @@ scheduler.start()
 
 @app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers['X-Line-Signature']
+    signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
     try:
         handler.handle(body, signature)
@@ -33,19 +34,30 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_message = event.message.text
-    dt = dateparser.parse(user_message, languages=["zh"])
+
+    # 嘗試從訊息抓提前幾分鐘，沒抓到預設15分鐘
+    match = re.search(r"提前(\d+)分鐘", user_message)
+    remind_minutes = int(match.group(1)) if match else 15
+
+    # 去掉「提前XX分鐘提醒」字串，避免影響時間解析
+    clean_message = re.sub(r"提前\d+分鐘提醒", "", user_message).strip()
+
+    dt = dateparser.parse(clean_message, languages=["zh"])
+
     if dt:
         now = datetime.now()
         if dt > now:
-            content = user_message.replace(str(dt.date()), "").replace(str(dt.time()), "").strip()
-            reminder_time = dt - timedelta(minutes=15)
+            # 去掉時間字串，剩下是提醒內容
+            content = clean_message.replace(str(dt.date()), "").replace(str(dt.time()), "").strip()
+
+            reminder_time = dt - timedelta(minutes=remind_minutes)
 
             with ApiClient(configuration) as api_client:
                 messaging_api = MessagingApi(api_client)
                 messaging_api.reply_message(
                     reply_token=event.reply_token,
                     messages=[
-                        TextMessage(text=f"已記下：{dt.strftime('%m月%d日 %H:%M')}「{content}」，我會提前15分鐘提醒你！")
+                        TextMessage(text=f"已記下：{dt.strftime('%m月%d日 %H:%M')}「{content}」，我會提前{remind_minutes}分鐘提醒你！")
                     ]
                 )
 
@@ -66,7 +78,7 @@ def handle_message(event):
             messaging_api.reply_message(
                 reply_token=event.reply_token,
                 messages=[
-                    TextMessage(text="請輸入格式如「6月12日 15:30 看牙醫」")
+                    TextMessage(text="請輸入格式如「6月12日 15:30 看牙醫 提前30分鐘提醒」")
                 ]
             )
 
@@ -76,11 +88,9 @@ def send_reminder(user_id, content, time_str):
         messaging_api.push_message(
             to=user_id,
             messages=[
-                TextMessage(text=f"提醒你：即將在 15 分鐘後「{content}」（{time_str}）")
+                TextMessage(text=f"提醒你：即將在 {time_str}「{content}」")
             ]
         )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-    # Trigger redeploy on Railway
-
