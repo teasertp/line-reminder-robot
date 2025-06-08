@@ -24,8 +24,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # LINE 設定
-channel_access_token = os.environ['LINE_CHANNEL_ACCESS_TOKEN']
-channel_secret = os.environ['LINE_CHANNEL_SECRET']
+channel_access_token = os.environ['pR4jAkUhh3ovttVfxbuo5G+jPdCtEnUIAawh3VWT0Lznm2zFISBSrTASGKCV4DctsWYv/aXaFMiVj4BQEHCVAFfXz6hkSmi8bRx1ZtbqNla4FVtfHVFu47S7R10ZkvlZA5mBrwj5/Jgxp61o4fHs5gdB04t89/1O/w1cDnyilFU=']
+channel_secret = os.environ['ab31f1bde2bc61ce3acb2a0f5ceaf186']
 configuration = Configuration(access_token=channel_access_token)
 handler = WebhookHandler(channel_secret)
 
