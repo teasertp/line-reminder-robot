@@ -15,248 +15,256 @@ import os
 import re
 import atexit
 import logging
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# ==================== 基础配置 ====================
+# 初始化Flask应用
+app = Flask(__name__)
 
-# Configure logging
+# 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
+        logging.FileHandler('app.log'),  # 日志文件
+        logging.StreamHandler()          # 控制台输出
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Suppress less important logs
+# 减少不重要的日志输出
 logging.getLogger('apscheduler').setLevel(logging.WARNING)
 logging.getLogger('linebot').setLevel(logging.INFO)
 
-def get_env(key):
-    """Safely get environment variable"""
-    value = os.getenv(key)
-    if not value:
-        logger.error(f"❌ Missing required environment variable: {key}")
+# ==================== 环境变量处理 ====================
+def 获取环境变量(变量名):
+    """安全获取环境变量，如果不存在则退出程序"""
+    值 = os.getenv(变量名)
+    if not 值:
+        logger.error(f"❌ 缺少必要的环境变量: {变量名}")
         exit(1)
-    return value
+    return 值
 
-# Initialize Flask
-app = Flask(__name__)
+# LINE机器人配置
+LINE_TOKEN = 获取环境变量('LINE_CHANNEL_ACCESS_TOKEN')  # LINE频道访问令牌
+LINE_SECRET = 获取环境变量('LINE_CHANNEL_SECRET')      # LINE频道密钥
+line配置 = Configuration(access_token=LINE_TOKEN)
+消息处理器 = WebhookHandler(LINE_SECRET)
 
-# LINE configuration
-channel_access_token = get_env('LINE_CHANNEL_ACCESS_TOKEN')
-channel_secret = get_env('LINE_CHANNEL_SECRET')
-configuration = Configuration(access_token=channel_access_token)
-handler = WebhookHandler(channel_secret)
-
-def init_scheduler():
-    """Initialize the scheduler with proper settings"""
-    scheduler = BackgroundScheduler(
+# ==================== 定时任务调度器 ====================
+def 初始化调度器():
+    """创建并配置定时任务调度器"""
+    调度器 = BackgroundScheduler(
         daemon=True,
         job_defaults={
-            'misfire_grace_time': 60*5,  # Allow 5 minutes delay
-            'coalesce': True  # Combine multiple triggers
+            'misfire_grace_time': 60*5,  # 允许5分钟内的延迟执行
+            'coalesce': True             # 合并多次触发
         }
     )
-    scheduler.start()
+    调度器.start()
     
-    # Graceful shutdown
-    def shutdown_scheduler():
-        if scheduler.running:
-            scheduler.shutdown(wait=False)
-            logger.info("Scheduler has been shutdown")
+    # 优雅关闭处理
+    def 关闭调度器():
+        if 调度器.running:
+            调度器.shutdown(wait=False)
+            logger.info("定时任务调度器已关闭")
     
-    atexit.register(shutdown_scheduler)
-    return scheduler
+    atexit.register(关闭调度器)
+    return 调度器
 
-scheduler = init_scheduler()
+任务调度器 = 初始化调度器()
 
-def parse_reminder_text(text):
-    """Parse Chinese datetime and advance time from message"""
-    # Match datetime (supports both "6月8日 18:25" and "6月8日18:25")
-    date_match = re.search(r'(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})', text)
-    if not date_match:
+# ==================== 核心功能函数 ====================
+def 解析提醒内容(文本):
+    """
+    从用户消息中解析出日期时间、提醒内容和提前时间
+    支持格式：
+    - "6月8日 18:25 开会"
+    - "6月8日18:25开会 提前20分钟"
+    """
+    # 匹配中文日期时间
+    日期匹配 = re.search(r'(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})', 文本)
+    if not 日期匹配:
         return None, None, None
     
-    month, day, hour, minute = map(int, date_match.groups())
+    月, 日, 时, 分 = map(int, 日期匹配.groups())
     
-    # Handle year automatically
-    now = datetime.now()
-    year = now.year
-    if (month, day) < (now.month, now.day):
-        year += 1
+    # 自动处理年份（如果月份日期已过，则设为明年）
+    现在 = datetime.now()
+    年 = 现在.year
+    if (月, 日) < (现在.month, 现在.day):
+        年 += 1
     
     try:
-        dt = datetime(year, month, day, hour, minute)
+        日期时间 = datetime(年, 月, 日, 时, 分)
     except ValueError:
         return None, None, None
 
-    # Extract advance time (supports "提前X分鐘")
-    advance_match = re.search(r'提前(\d+)分鐘', text)
-    advance_minutes = int(advance_match.group(1)) if advance_match else 15
+    # 提取提前时间（默认15分钟）
+    提前匹配 = re.search(r'提前(\d+)分鐘', 文本)
+    提前分钟 = int(提前匹配.group(1)) if 提前匹配 else 15
 
-    # Clean content
-    content = re.sub(
+    # 清理提醒内容（移除日期和提前时间部分）
+    内容 = re.sub(
         r'\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}|提前\d+分鐘', 
         '', 
-        text
+        文本
     ).strip()
     
-    return dt, content, advance_minutes
+    return 日期时间, 内容, 提前分钟
 
+def 发送提醒(用户ID, 内容, 时间字符串, 提前分钟):
+    """实际发送提醒消息给用户"""
+    try:
+        with ApiClient(line配置) as api客户端:
+            line接口 = MessagingApi(api客户端)
+            line接口.push_message(
+                to=用户ID,
+                messages=[TextMessage(
+                    text=f"⏰ 提醒通知：\n"
+                         f"您將在 {提前分钟} 分鐘後 ({时间字符串})\n"
+                         f"有行程：「{内容}」"
+                )]
+            )
+    except Exception as 错误:
+        logger.error(f"發送提醒失敗: {错误}")
+
+# ==================== LINE消息处理 ====================
 @app.route("/callback", methods=['POST'])
-def callback():
-    """LINE webhook callback"""
-    signature = request.headers.get('X-Line-Signature', '')
-    body = request.get_data(as_text=True)
+def 回调处理():
+    """LINE平台的消息回调接口"""
+    # 验证签名
+    签名 = request.headers.get('X-Line-Signature', '')
+    请求体 = request.get_data(as_text=True)
     
     try:
-        handler.handle(body, signature)
+        消息处理器.handle(请求体, 签名)
     except InvalidSignatureError:
         abort(400)
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
+    except Exception as 错误:
+        logger.error(f"Webhook處理錯誤: {错误}")
         abort(500)
         
     return 'OK'
 
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
-    """Handle incoming messages"""
+@消息处理器.add(MessageEvent, message=TextMessageContent)
+def 处理用户消息(事件):
+    """处理用户发送的文本消息"""
     try:
-        user_id = event.source.user_id
-        reply_token = event.reply_token
-        user_message = event.message.text
+        用户ID = 事件.source.user_id
+        回复令牌 = 事件.reply_token
+        用户消息 = 事件.message.text
 
-        dt, content, advance_minutes = parse_reminder_text(user_message)
+        # 解析用户输入
+        提醒时间, 提醒内容, 提前分钟 = 解析提醒内容(用户消息)
         
-        with ApiClient(configuration) as api_client:
-            line_api = MessagingApi(api_client)
+        with ApiClient(line配置) as api客户端:
+            line接口 = MessagingApi(api客户端)
 
-            # Validate parsing result
-            if not dt or not content:
-                line_api.reply_message(
+            # 验证解析结果
+            if not 提醒时间 or not 提醒内容:
+                line接口.reply_message(
                     ReplyMessageRequest(
-                        reply_token=reply_token,
+                        reply_token=回复令牌,
                         messages=[TextMessage(
-                            text="請輸入：\n「6月12日 15:30 事件內容」\n"
+                            text="請輸入正確格式：\n「6月12日 15:30 會議」\n"
                                  "或\n"
-                                 "「6月12日15:30事件內容 提前20分鐘提醒」"
+                                 "「6月12日15:30會議 提前20分鐘」"
                         )]
                     )
                 )
                 return
 
-            # Check if time is in future
-            if dt <= datetime.now():
-                line_api.reply_message(
+            # 检查是否为未来时间
+            if 提醒时间 <= datetime.now():
+                line接口.reply_message(
                     ReplyMessageRequest(
-                        reply_token=reply_token,
+                        reply_token=回复令牌,
                         messages=[TextMessage(
                             text="請輸入未來的時間！\n"
-                                 "（收到的時間已過期）"
+                                 "（您輸入的時間已經過期）"
                         )]
                     )
                 )
                 return
 
-            # Set up reminder job
-            reminder_time = dt - timedelta(minutes=advance_minutes)
-            job_id = f"reminder_{user_id}_{dt.timestamp()}"
+            # 计算实际提醒时间（提前X分钟）
+            实际提醒时间 = 提醒时间 - timedelta(minutes=提前分钟)
+            任务ID = f"reminder_{用户ID}_{提醒时间.timestamp()}"
 
-            scheduler.add_job(
-                send_reminder,
+            # 添加定时任务
+            任务调度器.add_job(
+                发送提醒,
                 'date',
-                run_date=reminder_time,
-                args=[user_id, content, dt.strftime("%m/%d %H:%M"), advance_minutes],
-                id=job_id,
+                run_date=实际提醒时间,
+                args=[用户ID, 提醒内容, 提醒时间.strftime("%m/%d %H:%M"), 提前分钟],
+                id=任务ID,
                 replace_existing=True
             )
 
-            # Send confirmation
-            line_api.reply_message(
+            # 发送确认消息
+            line接口.reply_message(
                 ReplyMessageRequest(
-                    reply_token=reply_token,
+                    reply_token=回复令牌,
                     messages=[TextMessage(
                         text=f"✅ 已設定提醒：\n"
-                             f"時間：{dt.strftime('%m月%d日 %H:%M')}\n"
-                             f"事項：{content}\n"
-                             f"將提前 {advance_minutes} 分鐘通知您"
+                             f"時間：{提醒时间.strftime('%m月%d日 %H:%M')}\n"
+                             f"事項：{提醒内容}\n"
+                             f"將提前 {提前分钟} 分鐘通知您"
                     )]
                 )
             )
 
-    except Exception as e:
-        logger.error(f"Message handling error: {e}")
+    except Exception as 错误:
+        logger.error(f"處理消息時錯誤: {错误}")
         try:
-            with ApiClient(configuration) as api_client:
-                MessagingApi(api_client).reply_message(
+            with ApiClient(line配置) as api客户端:
+                MessagingApi(api客户端).reply_message(
                     ReplyMessageRequest(
-                        reply_token=event.reply_token,
+                        reply_token=事件.reply_token,
                         messages=[TextMessage(text="⚠️ 處理您的消息時發生錯誤，請稍後再試")]
                     )
                 )
-        except Exception as fallback_error:
-            logger.critical(f"Failed to send error reply: {fallback_error}")
+        except Exception as 错误:
+            logger.critical(f"連錯誤回復都失敗了: {错误}")
 
-def send_reminder(user_id, content, time_str, advance_minutes):
-    """Send reminder message to user"""
-    try:
-        with ApiClient(configuration) as api_client:
-            line_api = MessagingApi(api_client)
-            line_api.push_message(
-                to=user_id,
-                messages=[TextMessage(
-                    text=f"⏰ 提醒通知：\n"
-                         f"您將在 {advance_minutes} 分鐘後 ({time_str})\n"
-                         f"有行程：「{content}」"
-                )]
-            )
-    except Exception as e:
-        logger.error(f"Failed to send reminder: {e}")
-
+# ==================== 管理接口 ====================
 @app.route('/health')
-def health_check():
-    """Health check endpoint"""
+def 健康检查():
+    """健康检查接口"""
     return {
-        "status": "healthy",
+        "status": "正常",
         "timestamp": datetime.now().isoformat(),
         "components": {
-            "line_api": bool(channel_access_token),
-            "scheduler": scheduler.running,
-            "jobs_count": len(scheduler.get_jobs())
+            "line_api": bool(LINE_TOKEN),
+            "scheduler": 任务调度器.running,
+            "active_jobs": len(任务调度器.get_jobs())
         }
     }, 200
 
-@app.route('/metrics')
-def metrics():
-    """Prometheus metrics endpoint"""
-    from prometheus_client import generate_latest
-    return generate_latest(), 200, {'Content-Type': 'text/plain'}
-
-@app.route('/reminders', methods=['GET'])
-def list_reminders():
-    """List all scheduled reminders (for debugging)"""
-    jobs = []
-    for job in scheduler.get_jobs():
-        jobs.append({
-            "id": job.id,
-            "next_run": str(job.next_run_time),
-            "args": job.args
+@app.route('/reminders')
+def 查看所有提醒():
+    """查看当前所有定时任务（调试用）"""
+    任务列表 = []
+    for 任务 in 任务调度器.get_jobs():
+        任务列表.append({
+            "id": 任务.id,
+            "next_run": str(任务.next_run_time),
+            "user_id": 任务.args[0] if len(任务.args) > 0 else None,
+            "content": 任务.args[1] if len(任务.args) > 1 else None
         })
-    return {"jobs": jobs}, 200
+    return {"reminders": 任务列表}, 200
 
+# ==================== 错误处理 ====================
 @app.errorhandler(Exception)
-def handle_global_error(e):
-    """Global error handler"""
-    logger.error(f"Global exception: {str(e)}", exc_info=True)
-    return {"error": "Internal Server Error"}, 500
+def 全局错误处理(错误):
+    """全局异常捕获"""
+    logger.error(f"全局異常: {str(错误)}", exc_info=True)
+    return {"error": "伺服器內部錯誤"}, 500
 
+# ==================== 启动应用 ====================
 if __name__ == "__main__":
     from waitress import serve
+    logger.info("啟動LINE提醒機器人...")
     serve(
         app,
         host="0.0.0.0",
