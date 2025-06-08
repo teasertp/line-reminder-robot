@@ -12,7 +12,6 @@ from linebot.v3.exceptions import InvalidSignatureError
 
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
-import dateparser
 import os
 import re
 import atexit
@@ -35,17 +34,26 @@ scheduler.start()
 atexit.register(lambda: scheduler.shutdown())
 
 def parse_reminder_text(text):
-    """改進的提醒內容解析"""
-    dt_match = re.search(r'(\d{1,2}月\d{1,2}日 \d{1,2}:\d{2})', text)
-    if not dt_match:
+    """專門處理中文日期格式的解析函數"""
+    match = re.search(r'(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})', text)
+    if not match:
         return None, None
     
-    dt_str = dt_match.group(1)
-    dt = dateparser.parse(dt_str, languages=["zh"])
-    if not dt:
+    month, day, hour, minute = map(int, match.groups())
+    now = datetime.now()
+    year = now.year
+    
+    # 處理跨年情況
+    if month < now.month:
+        year += 1
+    
+    try:
+        dt = datetime(year=year, month=month, day=day, hour=hour, minute=minute)
+    except ValueError:
         return None, None
     
-    content = text.replace(dt_str, "").strip()
+    content = re.sub(r'\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}', '', text).strip()
+    
     return dt, content
 
 @app.route("/callback", methods=['POST'])
@@ -77,7 +85,6 @@ def handle_message(event):
             messaging_api = MessagingApi(api_client)
 
             if not dt or not content:
-                # 使用正確的 ReplyMessageRequest
                 messaging_api.reply_message(
                     ReplyMessageRequest(
                         reply_token=reply_token,
@@ -103,7 +110,7 @@ def handle_message(event):
                     send_reminder,
                     'date',
                     run_date=reminder_time,
-                    args=[user_id, content, dt.strftime("%Y-%m-%d %H:%M")],
+                    args=[user_id, content, dt.strftime("%m月%d日 %H:%M")],
                     id=f"{user_id}_{dt.timestamp()}"
                 )
                 
