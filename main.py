@@ -1,5 +1,6 @@
 from flask import Flask, request, abort
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, TextMessage
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
+from linebot.v3.messaging import TextMessage
 from linebot.v3.webhook import WebhookHandler
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
@@ -8,7 +9,6 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import dateparser
 import os
-import re
 
 app = Flask(__name__)
 
@@ -34,52 +34,34 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_message = event.message.text
+    dt = dateparser.parse(user_message, languages=["zh"])
+    with ApiClient(configuration) as api_client:
+        messaging_api = MessagingApi(api_client)
 
-    # 嘗試從訊息抓提前幾分鐘，沒抓到預設15分鐘
-    match = re.search(r"提前(\d+)分鐘", user_message)
-    remind_minutes = int(match.group(1)) if match else 15
+        if dt:
+            now = datetime.now()
+            if dt > now:
+                # 把日期跟時間去掉，剩下是內容
+                content = user_message.replace(str(dt.date()), "").replace(str(dt.time()), "").strip()
+                reminder_time = dt - timedelta(minutes=15)
 
-    # 去掉「提前XX分鐘提醒」字串，避免影響時間解析
-    clean_message = re.sub(r"提前\d+分鐘提醒", "", user_message).strip()
-
-    dt = dateparser.parse(clean_message, languages=["zh"])
-
-    if dt:
-        now = datetime.now()
-        if dt > now:
-            # 去掉時間字串，剩下是提醒內容
-            content = clean_message.replace(str(dt.date()), "").replace(str(dt.time()), "").strip()
-
-            reminder_time = dt - timedelta(minutes=remind_minutes)
-
-            with ApiClient(configuration) as api_client:
-                messaging_api = MessagingApi(api_client)
+                reply_text = f"已記下：{dt.strftime('%m月%d日 %H:%M')}「{content}」，我會提前15分鐘提醒你！"
                 messaging_api.reply_message(
                     reply_token=event.reply_token,
-                    messages=[
-                        TextMessage(text=f"已記下：{dt.strftime('%m月%d日 %H:%M')}「{content}」，我會提前{remind_minutes}分鐘提醒你！")
-                    ]
+                    messages=[TextMessage(text=reply_text)]
                 )
 
-            scheduler.add_job(send_reminder, 'date', run_date=reminder_time,
-                              args=[event.source.user_id, content, dt.strftime("%Y-%m-%d %H:%M")])
+                scheduler.add_job(send_reminder, 'date', run_date=reminder_time,
+                                  args=[event.source.user_id, content, dt.strftime("%Y-%m-%d %H:%M")])
+            else:
+                messaging_api.reply_message(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="這個時間已經過了，請重新輸入未來的時間。")]
+                )
         else:
-            with ApiClient(configuration) as api_client:
-                messaging_api = MessagingApi(api_client)
-                messaging_api.reply_message(
-                    reply_token=event.reply_token,
-                    messages=[
-                        TextMessage(text="這個時間已經過了，請重新輸入未來的時間。")
-                    ]
-                )
-    else:
-        with ApiClient(configuration) as api_client:
-            messaging_api = MessagingApi(api_client)
             messaging_api.reply_message(
                 reply_token=event.reply_token,
-                messages=[
-                    TextMessage(text="請輸入格式如「6月12日 15:30 看牙醫 提前30分鐘提醒」")
-                ]
+                messages=[TextMessage(text="請輸入格式如「6月12日 15:30 看牙醫」")]
             )
 
 def send_reminder(user_id, content, time_str):
@@ -87,9 +69,7 @@ def send_reminder(user_id, content, time_str):
         messaging_api = MessagingApi(api_client)
         messaging_api.push_message(
             to=user_id,
-            messages=[
-                TextMessage(text=f"提醒你：即將在 {time_str}「{content}」")
-            ]
+            messages=[TextMessage(text=f"提醒你：即將在 15 分鐘後「{content}」（{time_str}）")]
         )
 
 if __name__ == "__main__":
