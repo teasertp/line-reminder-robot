@@ -165,4 +165,4 @@ def send_reminder(user_id, content, time_str, advance_minutes):
         logger.error(f"發送提醒失敗: {e}")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000))) 我需要放入什麼自己的東西嗎
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
