@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  reminder-bot:
+    build: .
+    container_name: reminder-bot
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./docker-data/reminder-bot:/app/data  # 掛載持久化卷
+    environment:
+      - LINE_CHANNEL_ACCESS_TOKEN=您的LINE_TOKEN
+      - LINE_CHANNEL_SECRET=您的LINE_SECRET
+      - PORT=5000
+
+volumes:
+  reminder-data:
