@@ -263,11 +263,9 @@ def 全局错误处理(错误):
 
 # ==================== 启动应用 ====================
 if __name__ == "__main__":
-    from waitress import serve
     logger.info("啟動LINE提醒機器人...")
-    serve(
-        app,
+    app.run(
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8080")),
-        threads=4
+        port=int(os.getenv("PORT", "5000")),  # 使用环境变量或默认5000端口
+        debug=os.getenv("FLASK_DEBUG", "false").lower() == "true"  # 根据环境变量决定调试模式
     )
